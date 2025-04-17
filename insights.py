@@ -1,17 +1,19 @@
 import streamlit as st
 import requests
-from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from urllib.parse import urlparse, parse_qs
 
-# Load API key from secrets
+# Get API key from Streamlit secrets
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 
-# Streamlit UI setup
-st.set_page_config(page_title="🔍 YouTube Key Insights", layout="centered")
-st.title("🔍 YouTube Key Insights Extractor")
-st.markdown("Paste a YouTube video URL and extract key ideas, insights, and takeaways.")
+# --- Streamlit setup ---
+st.set_page_config(page_title="🧠 Smart YouTube Insight Extractor", layout="centered")
+st.title("🧠 Smart YouTube Insight Extractor")
+st.markdown("Paste any YouTube URL – transcript or not – and get key insights powered by Groq AI.")
 
-# Extract video ID from URL
+# --- Helpers ---
+
+# Extract video ID
 def get_video_id(url):
     parsed_url = urlparse(url)
     if parsed_url.hostname == "youtu.be":
@@ -20,26 +22,44 @@ def get_video_id(url):
         return parse_qs(parsed_url.query).get("v", [None])[0]
     return None
 
-# Cached transcript fetching
+# Try to get transcript
 @st.cache_data(show_spinner=False)
-def fetch_transcript(video_id):
+def get_transcript(video_id):
     try:
         transcript = YouTubeTranscriptApi.get_transcript(video_id)
         return " ".join([t["text"] for t in transcript])
+    except (TranscriptsDisabled, NoTranscriptFound):
+        return None
     except Exception as e:
-        return f"Transcript error: {e}"
+        return f"Transcript fetch error: {e}"
 
-# Prompt for insight extraction
-def create_prompt(transcript_text):
-    return (
-        "Analyze the following YouTube video transcript and extract the key insights, main points, or important takeaways. "
-        "Present them in a clear bullet point list:\n\n"
-        f"{transcript_text}\n\n"
-        "Key Insights:"
-    )
+# Fallback: Get metadata using YouTube oEmbed API
+def get_video_metadata(video_url):
+    try:
+        oembed_url = f"https://www.youtube.com/oembed?url={video_url}&format=json"
+        response = requests.get(oembed_url)
+        data = response.json()
+        return {
+            "title": data.get("title", ""),
+            "author": data.get("author_name", ""),
+        }
+    except Exception:
+        return {}
+
+# Create a prompt from available data
+def build_prompt(transcript, metadata):
+    if transcript:
+        return f"Analyze this YouTube transcript and extract key insights:\n\n{transcript}\n\nInsights:"
+    elif metadata:
+        return (
+            f"Here's a YouTube video titled '{metadata.get('title', '')}' by {metadata.get('author', '')}.\n"
+            f"Although there's no transcript, try to infer the key themes and possible insights based on this context."
+        )
+    else:
+        return "Analyze this video and extract key insights. (No transcript or metadata available.)"
 
 # Call Groq API
-def groq_extract_insights(prompt):
+def query_groq(prompt):
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -55,16 +75,13 @@ def groq_extract_insights(prompt):
 
     try:
         result = response.json()
-        if "choices" in result:
-            return result["choices"][0]["message"]["content"]
-        else:
-            return f"Groq API error: {result}"
+        return result["choices"][0]["message"]["content"]
     except Exception as e:
-        return f"Error parsing Groq response: {e}"
+        return f"Error from Groq: {e}"
 
 # --- UI ---
 
-youtube_url = st.text_input("📺 Enter YouTube video URL:")
+youtube_url = st.text_input("📺 Enter a YouTube video URL:")
 
 if youtube_url:
     video_id = get_video_id(youtube_url)
@@ -73,20 +90,18 @@ if youtube_url:
         st.error("❌ Invalid YouTube URL.")
         st.stop()
 
-    with st.spinner("🧠 Extracting transcript..."):
-        transcript = fetch_transcript(video_id)
+    with st.spinner("🔍 Checking for transcript..."):
+        transcript = get_transcript(video_id)
 
-    if transcript.startswith("Transcript error"):
-        st.error(transcript)
-    else:
-        st.success("📃 Transcript fetched successfully.")
-        prompt = create_prompt(transcript)
+    metadata = {}
+    if not transcript:
+        with st.spinner("📄 No transcript found. Fetching video metadata..."):
+            metadata = get_video_metadata(youtube_url)
 
-        with st.spinner("🤖 Analyzing with Groq..."):
-            insights = groq_extract_insights(prompt)
+    prompt = build_prompt(transcript, metadata)
 
-        if insights:
-            st.subheader("🧩 Key Insights:")
-            st.markdown(insights)
-        else:
-            st.warning("⚠️ Could not extract insights.")
+    with st.spinner("⚡ Extracting insights using Groq..."):
+        insights = query_groq(prompt)
+
+    st.subheader("🧠 Key Insights:")
+    st.markdown(insights)
