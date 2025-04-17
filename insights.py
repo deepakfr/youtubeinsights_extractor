@@ -9,7 +9,7 @@ GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 # --- Streamlit setup ---
 st.set_page_config(page_title="🧠 Deep YouTube Insight Extractor", layout="centered")
 st.title("🧠 Deep YouTube Insight Extractor")
-st.markdown("Paste any YouTube URL – transcript or not – and get key insights powered by Groq AI.")
+st.markdown("Paste any YouTube URL – transcript or not – and get key insights.")
 
 # --- Helpers ---
 
